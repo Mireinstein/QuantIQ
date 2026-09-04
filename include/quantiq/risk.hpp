@@ -22,7 +22,8 @@ class Risk {
 public:
     explicit Risk(RiskLimits limits = {}) : limits_(limits) {}
 
-    bool allow(const Order& order, const Portfolio& portfolio, std::string& why_not);
+    bool allow(const Order& order, const Portfolio& portfolio, Price price,
+               const Account& account, std::string& why_not);
 
     void observe_equity(Money equity);
 

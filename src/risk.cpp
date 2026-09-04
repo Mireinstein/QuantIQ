@@ -2,7 +2,8 @@
 
 namespace quantiq {
 
-bool Risk::allow(const Order& order, const Portfolio& portfolio, std::string& why_not) {
+bool Risk::allow(const Order& order, const Portfolio& portfolio, Price price,
+                 const Account& account, std::string& why_not) {
     if (halted_.load()) {
         why_not = "halted: " + halt_reason_;
         return false;
@@ -19,6 +20,17 @@ bool Risk::allow(const Order& order, const Portfolio& portfolio, std::string& wh
     if (opens_new && portfolio.open_positions() >= limits_.max_positions) {
         why_not = "at max positions";
         return false;
+    }
+
+    // An order the account cannot pay for is refused here rather than left for
+    // the broker to bounce, because a rejection at the broker leaves the
+    // position silently different from what the strategy believes it holds.
+    if (order.side == Side::Buy) {
+        const Money cost = notional(price, order.quantity);
+        if (cost > account.cash) {
+            why_not = "costs " + cost.str() + ", cash is " + account.cash.str();
+            return false;
+        }
     }
 
     return true;

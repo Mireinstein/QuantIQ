@@ -19,13 +19,24 @@ struct StrategyParams {
     }
 };
 
-/// A strategy sees one bar at a time and answers with a signal or with nothing.
-/// Returning nullopt on most bars is the normal case, which is why the return
-/// type is optional rather than a Signal carrying a "do nothing" side.
+/// What a strategy wants, rather than what it wants done. `weight` is exposure
+/// to this symbol: 1.0 is a full position, 0.0 is flat.
+///
+/// Returning a target instead of a buy/sell instruction is what makes the bot
+/// restartable and safe to run more than one strategy against: the engine
+/// compares the target to what is actually held and trades only the gap, so a
+/// repeated signal places nothing, a restart mid-session recovers by reading
+/// the broker, and a rejected order simply gets re-attempted on the next bar
+/// instead of leaving the position silently wrong.
+struct Target {
+    double weight = 0.0;
+    std::string reason;
+};
+
 class Strategy {
 public:
     virtual ~Strategy() = default;
-    virtual std::optional<Signal> on_bar(const Bar& bar) = 0;
+    virtual Target on_bar(const Bar& bar) = 0;
     virtual std::string name() const = 0;
 };
 

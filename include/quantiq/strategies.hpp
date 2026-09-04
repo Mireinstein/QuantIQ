@@ -15,13 +15,12 @@ void register_builtin_strategies();
 class SmaCrossover : public Strategy {
 public:
     explicit SmaCrossover(const StrategyParams& p);
-    std::optional<Signal> on_bar(const Bar& bar) override;
+    Target on_bar(const Bar& bar) override;
     std::string name() const override { return "SmaCrossover"; }
 
 private:
     std::size_t fast_;
     std::size_t slow_;
-    Quantity size_;
     RingBuffer<double, 256> closes_;
     bool was_above_ = false;
     bool primed_ = false;
@@ -34,14 +33,13 @@ private:
 class MeanReversion : public Strategy {
 public:
     explicit MeanReversion(const StrategyParams& p);
-    std::optional<Signal> on_bar(const Bar& bar) override;
+    Target on_bar(const Bar& bar) override;
     std::string name() const override { return "MeanReversion"; }
 
 private:
     std::size_t window_;
     double z_entry_;
     double z_exit_;
-    Quantity size_;
     RingBuffer<double, 256> closes_;
     bool holding_ = false;
 };
@@ -51,13 +49,12 @@ private:
 class Momentum : public Strategy {
 public:
     explicit Momentum(const StrategyParams& p);
-    std::optional<Signal> on_bar(const Bar& bar) override;
+    Target on_bar(const Bar& bar) override;
     std::string name() const override { return "Momentum"; }
 
 private:
     std::size_t lookback_;
     double threshold_;
-    Quantity size_;
     RingBuffer<double, 256> closes_;
     bool holding_ = false;
 };
@@ -67,12 +64,11 @@ private:
 class Breakout : public Strategy {
 public:
     explicit Breakout(const StrategyParams& p);
-    std::optional<Signal> on_bar(const Bar& bar) override;
+    Target on_bar(const Bar& bar) override;
     std::string name() const override { return "Breakout"; }
 
 private:
     std::size_t lookback_;
-    Quantity size_;
     RingBuffer<double, 256> highs_;
     RingBuffer<double, 256> lows_;
     bool holding_ = false;

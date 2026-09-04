@@ -51,14 +51,28 @@ Fill MockVenue::submit(const Order& order) {
     // Fills at the close of the bar the strategy just saw. Real fills happen at
     // the next available price, so replay results are optimistic by roughly one
     // bar's move -- worth remembering before believing a replay number.
+    const Money value = notional(current_.close, order.quantity);
+
+    // Replay must not be able to spend money the account does not have, or the
+    // equity curve it produces describes an account nobody could have held.
+    if (order.side == Side::Buy && value > cash_) {
+        throw InsufficientFunds("cannot buy " + std::to_string(order.quantity) + " " +
+                                order.symbol + " for " + value.str() + " with " + cash_.str());
+    }
+
     const Fill fill{order.symbol, order.side, order.quantity, current_.close, current_.ts,
                     "mock-" + std::to_string(next_id_++)};
-
-    const Money value = notional(fill.price, fill.quantity);
     cash_ += order.side == Side::Buy ? -value : value;
+    holdings_[order.symbol] += order.side == Side::Buy ? order.quantity : -order.quantity;
     return fill;
 }
 
-Account MockVenue::account() const { return Account{cash_, cash_}; }
+Account MockVenue::account() const {
+    Money holdings_value;
+    for (const auto& [symbol, quantity] : holdings_) {
+        if (symbol == current_.symbol) holdings_value += notional(current_.close, quantity);
+    }
+    return Account{cash_ + holdings_value, cash_};
+}
 
 }  // namespace quantiq

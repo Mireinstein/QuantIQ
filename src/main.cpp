@@ -3,8 +3,11 @@
 #include <string>
 #include <vector>
 
+#include <csignal>
+
 #include "quantiq/alpaca.hpp"
 #include "quantiq/engine.hpp"
+#include "quantiq/live.hpp"
 #include "quantiq/errors.hpp"
 #include "quantiq/mock_venue.hpp"
 #include "quantiq/report.hpp"
@@ -19,6 +22,7 @@ int usage() {
     std::cerr << "usage:\n"
               << "  trader --replay FILE.csv [--strategy NAME|all] [--set key=value]...\n"
               << "  trader --report [--journal FILE]\n"
+              << "  trader --live [--config FILE]\n"
               << "  trader --check\n"
               << "  trader --test-order SYMBOL QTY\n"
               << "  trader --list\n\n"
@@ -60,11 +64,12 @@ int replay(const std::string& csv, const std::string& strategy_name, const Strat
         auto strategy = StrategyRegistry::instance().create(name, params);
         MockVenue venue(bars);
         Risk risk;
+        const Sizer sizer(params.get("fraction", 0.10));
 
         std::cout << "\n  " << strategy->name() << '\n';
         journal.session("replay_start", csv + " " + strategy->name());
 
-        Engine engine(venue, *strategy, journal, risk);
+        Engine engine(venue, *strategy, journal, risk, sizer);
         const auto stats = engine.run(verbose);
 
         std::cout << "    " << stats.signals << " signals · " << stats.fills << " fills · "
@@ -74,6 +79,21 @@ int replay(const std::string& csv, const std::string& strategy_name, const Strat
     }
 
     print_report(std::cout, summarize(journal_path));
+    return 0;
+}
+
+/// Ctrl-C sets the flag and lets the trader shut down through its normal path:
+/// the feed thread is stopped and joined, and the journal is flushed. Killing
+/// the process outright would leave the position and the journal disagreeing.
+void on_interrupt(int) { LiveTrader::stop_flag().store(true); }
+
+int live(const std::string& config_path) {
+    std::signal(SIGINT, on_interrupt);
+    std::signal(SIGTERM, on_interrupt);
+
+    std::filesystem::create_directories("journal");
+    LiveTrader trader(LiveConfig::from_file(config_path));
+    trader.run();
     return 0;
 }
 
@@ -145,6 +165,10 @@ int main(int argc, char** argv) {
                 mode = "list";
             } else if (arg == "--check") {
                 mode = "check";
+            } else if (arg == "--live") {
+                mode = "live";
+            } else if (arg == "--config" && i + 1 < argc) {
+                csv = argv[++i];
             } else if (arg == "--test-order" && i + 2 < argc) {
                 mode = "test-order";
                 csv = argv[++i];
@@ -166,6 +190,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (mode == "check") return check();
+        if (mode == "live") return live(csv.empty() ? "config.json" : csv);
         if (mode == "test-order") {
             return test_order(csv, static_cast<Quantity>(params.get("qty", 1)));
         }

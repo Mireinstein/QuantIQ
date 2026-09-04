@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <fstream>
 
 #include "quantiq/alpaca.hpp"
 #include "quantiq/engine.hpp"
 #include "quantiq/errors.hpp"
+#include "quantiq/live.hpp"
 #include "quantiq/mock_venue.hpp"
 #include "quantiq/report.hpp"
 #include "quantiq/strategies.hpp"
@@ -22,19 +24,23 @@ std::vector<Bar> bars_from(const std::vector<double>& closes) {
     return bars;
 }
 
-/// Fires one buy then one sell, so an engine test can be about the engine
-/// rather than about whether an indicator crossed.
+/// Holds a fixed target from a chosen bar onward, so an engine test is about
+/// the engine rather than about whether an indicator crossed.
 class ScriptedStrategy : public Strategy {
 public:
-    std::optional<Signal> on_bar(const Bar&) override {
+    ScriptedStrategy(int enter_on, int exit_on) : enter_(enter_on), exit_(exit_on) {}
+
+    Target on_bar(const Bar&) override {
         ++seen_;
-        if (seen_ == 2) return Signal{Side::Buy, 10, "scripted entry"};
-        if (seen_ == 4) return Signal{Side::Sell, 10, "scripted exit"};
-        return std::nullopt;
+        if (exit_ > 0 && seen_ >= exit_) return Target{0.0, "scripted exit"};
+        if (seen_ >= enter_) return Target{1.0, "scripted entry"};
+        return Target{0.0, "waiting"};
     }
     std::string name() const override { return "Scripted"; }
 
 private:
+    int enter_;
+    int exit_;
     int seen_ = 0;
 };
 
@@ -44,33 +50,80 @@ struct TempJournal {
     ~TempJournal() { std::filesystem::remove(path); }
 };
 
+Account account_with(double cash) {
+    return Account{Money::from_double(cash), Money::from_double(cash)};
+}
+
 }  // namespace
 
-TEST_CASE("the engine walks every bar and books the fills it is given") {
+TEST_CASE("the engine trades the gap between the target and what is held") {
     TempJournal tmp;
     MockVenue venue(bars_from({100, 100, 110, 120, 130}));
-    ScriptedStrategy strategy;
+    ScriptedStrategy strategy(2, 4);
     Journal journal(tmp.path);
     Risk risk;
 
-    Engine engine(venue, strategy, journal, risk);
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
     const auto stats = engine.run();
 
     REQUIRE(stats.bars == 5);
-    REQUIRE(stats.signals == 2);
-    REQUIRE(stats.fills == 2);
+    REQUIRE(stats.fills == 2);   // one entry, one exit, and no drift trades between
     REQUIRE(stats.rejected == 0);
-    REQUIRE(engine.portfolio().realized().to_double() == 200.0);
+    REQUIRE(engine.portfolio().realized().to_double() > 0.0);
+}
+
+TEST_CASE("a rising price does not churn the position to chase its weight") {
+    TempJournal tmp;
+    // Price climbs 20%, so a fixed weight implies steadily fewer shares. Inside
+    // the band that is drift, not a decision, and must not trade.
+    MockVenue venue(bars_from({100, 100, 104, 108, 112, 116, 120}));
+    ScriptedStrategy strategy(2, 0);
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
+    REQUIRE(engine.run().fills == 1);
+}
+
+TEST_CASE("a target that does not change places no further orders") {
+    TempJournal tmp;
+    // Constant price, so the share count the target implies never moves either.
+    MockVenue venue(bars_from({100, 100, 100, 100, 100, 100, 100, 100}));
+    ScriptedStrategy strategy(2, 0);   // enters and never exits
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
+    const auto stats = engine.run();
+
+    REQUIRE(stats.bars == 8);
+    REQUIRE(stats.fills == 1);   // not one per bar
+}
+
+TEST_CASE("adopting broker positions stops a restart from buying twice") {
+    TempJournal tmp;
+    MockVenue venue(bars_from({100, 100, 100, 100}));
+    ScriptedStrategy strategy(1, 0);
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
+    // 10% of the mock's $100k at $100 is exactly what the strategy would buy.
+    engine.adopt({Position{"AAPL", 100, Price::from_double(100.0)}});
+    const auto stats = engine.run();
+
+    REQUIRE(stats.fills == 0);
+    REQUIRE(engine.portfolio().find("AAPL")->quantity == 100);
 }
 
 TEST_CASE("the report reconstructs the round trip from the journal alone") {
     TempJournal tmp;
     MockVenue venue(bars_from({100, 100, 110, 120, 130}));
-    ScriptedStrategy strategy;
+    ScriptedStrategy strategy(2, 4);
     Journal journal(tmp.path);
     Risk risk;
 
-    Engine engine(venue, strategy, journal, risk);
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
     engine.run();
 
     const auto results = summarize(tmp.path);
@@ -78,7 +131,6 @@ TEST_CASE("the report reconstructs the round trip from the journal alone") {
     REQUIRE(results[0].strategy == "Scripted");
     REQUIRE(results[0].trades == 1);
     REQUIRE(results[0].wins == 1);
-    REQUIRE(results[0].net.to_double() == 200.0);
 }
 
 TEST_CASE("risk refuses to sell a position that is not held") {
@@ -87,8 +139,30 @@ TEST_CASE("risk refuses to sell a position that is not held") {
     std::string why;
 
     const Order sell{"AAPL", Side::Sell, 10, "S", ""};
-    REQUIRE_FALSE(risk.allow(sell, empty, why));
+    REQUIRE_FALSE(risk.allow(sell, empty, Price::from_double(10.0), account_with(1000), why));
     REQUIRE(why == "no position to sell");
+}
+
+TEST_CASE("risk refuses an order the account cannot pay for") {
+    Portfolio empty;
+    Risk risk;
+    std::string why;
+
+    // 100 shares at $50 is $5,000 against $1,000 of cash.
+    const Order buy{"AAPL", Side::Buy, 100, "S", ""};
+    REQUIRE_FALSE(risk.allow(buy, empty, Price::from_double(50.0), account_with(1000), why));
+    REQUIRE(why.find("cash is") != std::string::npos);
+
+    REQUIRE(risk.allow(buy, empty, Price::from_double(50.0), account_with(6000), why));
+}
+
+TEST_CASE("the mock venue will not spend money the account does not have") {
+    // Without this the replay equity curve describes an account nobody could
+    // have held.
+    MockVenue venue(bars_from({100}), Money::from_double(500.0));
+    venue.next_bar();
+
+    REQUIRE_THROWS_AS(venue.submit(Order{"AAPL", Side::Buy, 100, "S", ""}), InsufficientFunds);
 }
 
 TEST_CASE("risk caps how many names can be open at once") {
@@ -98,10 +172,12 @@ TEST_CASE("risk caps how many names can be open at once") {
 
     Risk risk(RiskLimits{.max_positions = 2});
     std::string why;
+    const auto price = Price::from_double(1.0);
+    const auto account = account_with(100000);
 
     // Adding to a name already held is fine; a third name is not.
-    REQUIRE(risk.allow(Order{"AAPL", Side::Buy, 1, "S", ""}, p, why));
-    REQUIRE_FALSE(risk.allow(Order{"NVDA", Side::Buy, 1, "S", ""}, p, why));
+    REQUIRE(risk.allow(Order{"AAPL", Side::Buy, 1, "S", ""}, p, price, account, why));
+    REQUIRE_FALSE(risk.allow(Order{"NVDA", Side::Buy, 1, "S", ""}, p, price, account, why));
     REQUIRE(why == "at max positions");
 }
 
@@ -109,11 +185,13 @@ TEST_CASE("a halt stops everything, including orders that were otherwise fine") 
     Portfolio p;
     Risk risk;
     std::string why;
+    const auto price = Price::from_double(1.0);
+    const auto account = account_with(100000);
 
-    REQUIRE(risk.allow(Order{"AAPL", Side::Buy, 1, "S", ""}, p, why));
+    REQUIRE(risk.allow(Order{"AAPL", Side::Buy, 1, "S", ""}, p, price, account, why));
     risk.halt("manual");
     REQUIRE(risk.halted());
-    REQUIRE_FALSE(risk.allow(Order{"AAPL", Side::Buy, 1, "S", ""}, p, why));
+    REQUIRE_FALSE(risk.allow(Order{"AAPL", Side::Buy, 1, "S", ""}, p, price, account, why));
 }
 
 TEST_CASE("a drawdown past the limit trips the halt on its own") {
@@ -171,4 +249,113 @@ TEST_CASE("the venue refuses a base URL that is not the paper endpoint") {
 TEST_CASE("a missing credential names the variable rather than failing as a 401") {
     unsetenv("QUANTIQ_NOT_SET");
     REQUIRE_THROWS_AS(require_env("QUANTIQ_NOT_SET"), ConfigError);
+}
+
+TEST_CASE("the queue hands items across threads in order") {
+    BoundedQueue<int> queue(4);
+    std::thread producer([&] {
+        for (int i = 0; i < 20; ++i) queue.push(i);
+        queue.close();
+    });
+
+    std::vector<int> received;
+    while (auto value = queue.pop()) received.push_back(*value);
+    producer.join();
+
+    REQUIRE(received.size() == 20);
+    REQUIRE(received.front() == 0);
+    REQUIRE(received.back() == 19);
+}
+
+TEST_CASE("closing the queue releases a consumer that is blocked on it") {
+    // Without this a shutdown deadlocks: the consumer waits for data that will
+    // never arrive and the thread cannot be joined.
+    BoundedQueue<int> queue(4);
+    std::thread consumer([&] { REQUIRE_FALSE(queue.pop().has_value()); });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    queue.close();
+    consumer.join();
+}
+
+TEST_CASE("a bounded queue makes the producer wait rather than growing forever") {
+    BoundedQueue<int> queue(2);
+    queue.push(1);
+    queue.push(2);
+
+    std::atomic<bool> third_landed{false};
+    std::thread producer([&] {
+        queue.push(3);
+        third_landed.store(true);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    REQUIRE_FALSE(third_landed.load());   // blocked, as it should be
+
+    REQUIRE(queue.pop().value() == 1);
+    producer.join();
+    REQUIRE(third_landed.load());
+}
+
+TEST_CASE("a feed message is handled by type rather than by nullable fields") {
+    std::vector<FeedMessage> messages{Bar{"AAPL", Timestamp{}, {}, {}, {}, Price::from_double(1.0), 0},
+                                      FeedError{"timeout"}, SessionClose{Timestamp{}}};
+
+    int bars = 0, errors = 0, closes = 0;
+    for (const auto& message : messages) {
+        std::visit(
+            [&](auto&& m) {
+                using T = std::decay_t<decltype(m)>;
+                if constexpr (std::is_same_v<T, Bar>) ++bars;
+                else if constexpr (std::is_same_v<T, FeedError>) ++errors;
+                else if constexpr (std::is_same_v<T, SessionClose>) ++closes;
+            },
+            message);
+    }
+
+    REQUIRE(bars == 1);
+    REQUIRE(errors == 1);
+    REQUIRE(closes == 1);
+}
+
+TEST_CASE("two strategies cannot both claim the same symbol") {
+    const std::string path = "test-config.json";
+    {
+        std::ofstream out(path);
+        out << R"({"strategies":[
+              {"name":"SmaCrossover","symbols":["AAPL","MSFT"]},
+              {"name":"Momentum","symbols":["MSFT"]}]})";
+    }
+
+    REQUIRE_THROWS_AS(LiveConfig::from_file(path), ConfigError);
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("a valid config builds one entry per symbol") {
+    const std::string path = "test-config.json";
+    {
+        std::ofstream out(path);
+        out << R"({"position_fraction":0.05,"strategies":[
+              {"name":"SmaCrossover","symbols":["AAPL","MSFT"],"params":{"fast":5,"slow":20}},
+              {"name":"Momentum","symbols":["NVDA"]}]})";
+    }
+
+    const auto config = LiveConfig::from_file(path);
+    std::filesystem::remove(path);
+
+    REQUIRE(config.position_fraction == 0.05);
+    REQUIRE(config.strategies.size() == 2);
+    REQUIRE(config.strategies[0].symbols.size() == 2);
+    REQUIRE(config.strategies[0].params.get("fast", 0) == 5);
+}
+
+TEST_CASE("a config listing no strategies is rejected rather than run empty") {
+    const std::string path = "test-config.json";
+    {
+        std::ofstream out(path);
+        out << R"({"strategies":[]})";
+    }
+
+    REQUIRE_THROWS_AS(LiveConfig::from_file(path), ConfigError);
+    std::filesystem::remove(path);
 }

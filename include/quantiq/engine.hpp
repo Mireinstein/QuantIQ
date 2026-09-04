@@ -1,12 +1,12 @@
 #pragma once
 
-#include <memory>
 #include <string>
 #include <unordered_map>
 
 #include "quantiq/journal.hpp"
 #include "quantiq/portfolio.hpp"
 #include "quantiq/risk.hpp"
+#include "quantiq/sizer.hpp"
 #include "quantiq/strategy.hpp"
 #include "quantiq/venue.hpp"
 
@@ -19,28 +19,45 @@ struct EngineStats {
     std::size_t rejected = 0;
 };
 
-/// The loop: pull a bar, show it to the strategy, put any resulting order past
-/// the risk layer, send what survives to the venue, book the fill.
+/// The loop: pull a bar, ask the strategy what it wants to hold, work out how
+/// many shares that is, and trade the difference between that and what is
+/// actually held.
 ///
-/// Nothing here knows whether the bars came from a CSV or a websocket. That is
-/// the whole reason the Venue interface exists.
+/// Trading the difference rather than acting on a buy/sell instruction is what
+/// makes this safe to restart and safe to run repeatedly: if the position
+/// already matches the target, the difference is zero and nothing is sent.
+///
+/// Nothing here knows whether the bars came from a CSV or from Alpaca. That is
+/// the reason the Venue interface exists.
 class Engine {
 public:
-    Engine(Venue& venue, Strategy& strategy, Journal& journal, Risk& risk);
+    /// `band` is how far the held position may drift from the target before it
+    /// is worth trading. Without it, a rising price alone shrinks the share
+    /// count a fixed weight implies, and the bot sells a handful of shares
+    /// every bar to chase it -- paying spread to correct noise.
+    Engine(Venue& venue, Strategy& strategy, Journal& journal, Risk& risk, Sizer sizer = Sizer{},
+           double band = 0.20);
 
-    /// Runs until the venue stops producing bars. Returns what happened.
     EngineStats run(bool verbose = false);
 
+    /// One bar through the whole pipeline. Exposed so the live loop can drive
+    /// it from a queue rather than from `run`.
+    void on_bar(const Bar& bar, bool verbose = false);
+
+    /// Adopts positions that already exist at the broker, so a restart does not
+    /// mistake a held position for a flat one and buy it twice.
+    void adopt(const std::vector<Position>& positions);
+
     const Portfolio& portfolio() const noexcept { return portfolio_; }
-    const std::unordered_map<Symbol, Price>& marks() const noexcept { return marks_; }
+    const EngineStats& stats() const noexcept { return stats_; }
 
 private:
-    void handle(const Bar& bar, const Signal& signal, bool verbose);
-
     Venue& venue_;
     Strategy& strategy_;
     Journal& journal_;
     Risk& risk_;
+    Sizer sizer_;
+    double band_;
     Portfolio portfolio_;
     std::unordered_map<Symbol, Price> marks_;
     EngineStats stats_;

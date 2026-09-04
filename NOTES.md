@@ -1,57 +1,67 @@
 # Where this is
 
 Working notes, not documentation. The README describes what the project does;
-this file describes what is half-finished and what has not been decided.
+this file describes what is unfinished and what was deliberately left out.
 
 ## Done
 
-Steps 1-5 of the plan, all committed:
+All eight planned steps.
 
 1. `Price`/`Money` fixed-point, `RingBuffer<T,N>`, exception hierarchy
 2. `Venue` and `Strategy` interfaces, `MockVenue`, `Portfolio`, `Risk`
 3. `fetch-bars` (Yahoo, no key needed), CSV replay, `Journal`, `--report`
 4. Four strategies behind a registry, `--strategy all` to compare them
 5. `AlpacaVenue` -- account, clock, positions, history, order submission
+6. `PollingFeed` on its own thread, `variant<Bar, SessionOpen, SessionClose,
+   FeedError>` messages over a bounded queue
+7. Live trading: reconciliation against the broker at session start, atomic
+   kill switch, clean shutdown on SIGINT
+8. Market-clock loop so it runs itself daily, -O0 vs -O3 measurement, Doxygen
 
-34 tests, all offline. `./build/trader --check` reads the live paper account.
+52 tests, all offline. `--check` and `--live` both verified against the live
+paper account.
 
-## Not done
+## Decisions that changed along the way
 
-6. Market data feed: websocket, `variant<Trade,Quote,Bar,Status>` + visit,
-   into the queue `AlpacaVenue::push_bar` already writes to
-7. Threads (receive / strategy / order), kill switch wired to live trading,
-   state persisted across restarts
-8. Market-clock loop so it runs itself daily, profiling pass, Doxygen
+**Strategies return a target, not a buy/sell.** The first version had
+`on_bar` return `optional<Signal>` meaning "buy 50 shares". That cannot survive
+a restart (the bot has no idea what it already holds), lets two strategies fight
+over one symbol, and drifts silently when the broker rejects an order. Now
+`on_bar` returns a `Target` weight and the engine trades the difference against
+what is actually held.
 
-## The open design decision
+**Sizing is by value, not by share count.** Fifty shares of a $880 stock and
+fifty of a $12 stock are not the same bet, and a report comparing strategies by
+share count mostly compares which of them traded expensive names.
 
-Strategies currently return `optional<Signal>` -- "buy 50 shares". That is the
-wrong shape for live trading and needs to change before step 7.
+**A rebalance band exists because the first version churned.** Holding a fixed
+weight while a price rises means steadily fewer shares, so the engine was
+selling a handful every bar to chase its own target. Entries and exits always
+trade; drift only trades once it exceeds the band.
 
-The standard design has strategies return a **target position** instead:
+**Polling, not a websocket.** The strategies consume daily bars. A streaming
+socket would deliver thousands of ticks an hour that nothing reads. The thread
+structure is what a socket would need, so swapping the feed later changes one
+class.
 
-    virtual double target(const Bar&) = 0;   // 1.0 = fully long, 0.0 = flat
+## Left out on purpose
 
-and a separate stage nets targets across strategies, sizes them, and diffs
-against what the broker actually holds. That diff is what makes the bot
-restartable: it asks Alpaca what it owns, compares to what it wants, trades the
-gap. With "buy 50", a restart mid-session has no idea what it already holds, two
-strategies on the same symbol fight, and a rejected order leaves state drifting.
-
-Sizing follows the same staging. Right now every trade is a flat 50 shares,
-which means 50 NVDA is a 44% position and 50 Ford is 0.6% -- so the report
-cannot fairly compare strategies. Fixed-fractional (X% of equity) is the
-baseline; volatility-scaled (`qty = risk_budget * equity / (ATR * price)`) is
-the systematic-trading standard, and is worth doing once ATR exists.
+- Volatility-scaled sizing. Fixed-fractional is the baseline; scaling by ATR so
+  each position carries equal *risk* rather than equal *dollars* is the
+  systematic-trading standard and is the natural next change.
+- Shorting. Targets are clamped to 0..1.
+- Multiple symbols per strategy instance. One instance holds the state of one
+  position, so the live trader builds one per symbol.
 
 ## Known rough edges
 
-- Replay fills at the close of the bar that produced the signal, so replay
-  numbers are optimistic by roughly one bar's move.
-- `MockVenue` ignores cash: it will "buy" past the account balance.
-- Only `SmaCrossover` has had its warm-up behaviour tested carefully.
-- Strategies hold a single `holding_` flag, so one instance is implicitly tied
-  to one symbol. Multi-symbol needs one instance per strategy per symbol.
+- Replay fills at the close of the bar that produced the signal. Real fills
+  happen at the next available price, so replay numbers are optimistic by
+  roughly one bar's move.
+- `--report` pairs exits against entries FIFO per strategy and symbol; a
+  position still open contributes nothing to the totals.
+- The feed polls every symbol on one interval. With a large universe that
+  becomes the bottleneck long before anything else does.
 
 ## Credentials
 

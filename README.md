@@ -43,11 +43,38 @@ by roughly one bar's move.
 
     ./build/trader --check                  # credentials, account, market clock, positions
     ./build/trader --test-order AAPL 1      # places one real paper order
+    ./build/trader --live --config config.json
+
+`--live` runs until stopped. It asks Alpaca when the market next opens rather
+than hardcoding a calendar, so nights, weekends and holidays are handled by
+sleeping. At each session start it reads the account's real positions and adopts
+them, so a restart does not mistake a held position for a flat one. Ctrl-C stops
+the feed thread, joins it, and flushes the journal.
+
+Three threads: one polls for bars, one turns them into orders, and a signal
+handler can stop both. Feed messages are a `variant<Bar, SessionOpen,
+SessionClose, FeedError>` so the consumer has to handle each kind rather than
+checking a nullable field.
+
+Each symbol belongs to exactly one strategy — the config is rejected otherwise,
+since two strategies setting one position would undo each other and the report
+could no longer say which earned what.
 
 `AlpacaVenue` refuses to construct unless `ALPACA_BASE_URL` points at
 `paper-api.alpaca.markets`, so a typo cannot reach a live account. Credentials
 come from a gitignored `.env`; anything already exported wins, so a deployment
 overrides the file without editing it.
+
+## Sizing
+
+Positions are sized as a fraction of equity, not as a share count. Fifty shares
+of a $880 stock is a 44% position on a $100k account and fifty shares of a $12
+stock is under 1%, so a report comparing strategies by share count is mostly
+comparing which of them traded expensive names.
+
+A rebalance band (default 20%) stops the bot chasing its own target: as a price
+rises, a fixed weight implies fewer shares, and without the band it would sell a
+handful every bar to correct drift it was never asked to correct.
 
 ## Strategies
 
@@ -70,6 +97,23 @@ for the rest of the session.
     include/quantiq/    headers
     src/                implementations, trader and fetch-bars entry points
     tests/              Catch2, 32 cases, all offline
+
+## Performance
+
+Replaying 1,255 daily bars through all four strategies, best of three runs:
+
+| Build | Time |
+|---|---|
+| `-O0` | 30.7 ms |
+| `-O3` | 13.0 ms |
+
+2.4x, for 5,020 bar-evaluations. Worth keeping in proportion: the bot makes one
+decision per symbol per day, and an Alpaca round trip is 20–200 ms, so the
+optimisation matters to replay and to nothing else.
+
+## Docs
+
+    doxygen Doxyfile && open docs/html/index.html
 
 ## Money
 

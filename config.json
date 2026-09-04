@@ -1,0 +1,30 @@
+{
+  "position_fraction": 0.10,
+  "rebalance_band": 0.20,
+  "poll_seconds": 60,
+  "journal": "journal/live.jsonl",
+
+  "risk": {
+    "max_positions": 4,
+    "max_drawdown": 0.15,
+    "max_daily_loss": 2000.0
+  },
+
+  "strategies": [
+    {
+      "name": "SmaCrossover",
+      "symbols": ["AAPL"],
+      "params": { "fast": 9, "slow": 21 }
+    },
+    {
+      "name": "MeanReversion",
+      "symbols": ["MSFT"],
+      "params": { "window": 20, "z_entry": -2.0, "z_exit": -0.5 }
+    },
+    {
+      "name": "Breakout",
+      "symbols": ["NVDA"],
+      "params": { "lookback": 20 }
+    }
+  ]
+}

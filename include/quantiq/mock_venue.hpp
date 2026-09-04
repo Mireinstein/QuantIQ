@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "quantiq/venue.hpp"
@@ -30,6 +31,7 @@ private:
     std::size_t cursor_ = 0;
     Bar current_{};
     Money cash_;
+    std::unordered_map<Symbol, Quantity> holdings_;
     int next_id_ = 1;
 };
 
