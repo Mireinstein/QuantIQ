@@ -1,0 +1,34 @@
+#pragma once
+
+#include <fstream>
+#include <string>
+
+#include "quantiq/types.hpp"
+
+namespace quantiq {
+
+/// Append-only record of everything the bot decided, one JSON object per line.
+/// The report is computed from this file rather than from in-memory state, so a
+/// crash loses at most the current bar and the numbers survive a restart.
+///
+/// The stream is opened in the constructor and closed by the destructor; if
+/// opening fails the object never exists, so there is no half-built journal to
+/// check for.
+class Journal {
+public:
+    explicit Journal(const std::string& path);
+
+    void fill(const Fill& f, const std::string& strategy, const std::string& reason);
+    void rejected(const Order& o, const std::string& why);
+    void session(const std::string& event, const std::string& detail);
+
+    const std::string& path() const noexcept { return path_; }
+
+private:
+    void write_line(const std::string& json);
+
+    std::string path_;
+    std::ofstream out_;
+};
+
+}  // namespace quantiq

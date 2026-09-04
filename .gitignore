@@ -1,0 +1,7 @@
+build/
+bars/*.csv
+journal/
+.env
+.DS_Store
+.claude/
+CLAUDE.md
