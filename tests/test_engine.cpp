@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "quantiq/alpaca.hpp"
 #include "quantiq/engine.hpp"
 #include "quantiq/errors.hpp"
 #include "quantiq/mock_venue.hpp"
@@ -149,4 +150,25 @@ TEST_CASE("a CSV round-trips into bars") {
 
 TEST_CASE("a missing bar file is a data error with the path in it") {
     REQUIRE_THROWS_AS(MockVenue::bars_from_csv("does-not-exist.csv"), DataError);
+}
+
+TEST_CASE("the venue refuses a base URL that is not the paper endpoint") {
+    // A typo here would place real orders with real money, so it is checked at
+    // construction rather than left to be noticed on the first fill.
+    setenv("ALPACA_BASE_URL", "https://api.alpaca.markets", 1);
+    setenv("ALPACA_DATA_URL", "https://data.alpaca.markets", 1);
+    setenv("ALPACA_API_KEY_ID", "x", 1);
+    setenv("ALPACA_API_SECRET_KEY", "y", 1);
+
+    REQUIRE_THROWS_AS(AlpacaVenue(), ConfigError);
+
+    unsetenv("ALPACA_BASE_URL");
+    unsetenv("ALPACA_DATA_URL");
+    unsetenv("ALPACA_API_KEY_ID");
+    unsetenv("ALPACA_API_SECRET_KEY");
+}
+
+TEST_CASE("a missing credential names the variable rather than failing as a 401") {
+    unsetenv("QUANTIQ_NOT_SET");
+    REQUIRE_THROWS_AS(require_env("QUANTIQ_NOT_SET"), ConfigError);
 }

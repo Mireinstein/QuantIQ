@@ -32,7 +32,8 @@ add_library(quantiq_core
   src/report.cpp
   src/engine.cpp
   src/risk.cpp
-  src/http.cpp)
+  src/http.cpp
+  src/alpaca.cpp)
 target_include_directories(quantiq_core PUBLIC include)
 target_link_libraries(quantiq_core PUBLIC nlohmann_json::nlohmann_json CURL::libcurl)
 

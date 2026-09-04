@@ -39,6 +39,16 @@ AAPL, 1255 daily bars, 2021-09 to 2026-09, 50 shares a trade. Replay fills at
 the close of the bar that produced the signal, so these numbers are optimistic
 by roughly one bar's move.
 
+## Live paper trading
+
+    ./build/trader --check                  # credentials, account, market clock, positions
+    ./build/trader --test-order AAPL 1      # places one real paper order
+
+`AlpacaVenue` refuses to construct unless `ALPACA_BASE_URL` points at
+`paper-api.alpaca.markets`, so a typo cannot reach a live account. Credentials
+come from a gitignored `.env`; anything already exported wins, so a deployment
+overrides the file without editing it.
+
 ## Strategies
 
 | Name | Rule | Parameters |
