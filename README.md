@@ -65,6 +65,19 @@ could no longer say which earned what.
 come from a gitignored `.env`; anything already exported wins, so a deployment
 overrides the file without editing it.
 
+## Dashboard
+
+    ./build/trader --dashboard --journal journal/trades.jsonl -o dashboard.html
+
+Writes one self-contained HTML file: the strategy table, a cumulative-profit
+curve per strategy, and every closed trade newest first. No server and nothing
+fetched at runtime, so it opens offline — the charts are inline SVG rather than
+a library, and a page that pulls a script from a CDN stops working exactly when
+you want to read it.
+
+The journal is the only source of truth. Regenerate the page whenever; throwing
+it away costs nothing.
+
 ## Sizing
 
 Positions are sized as a fraction of equity, not as a share count. Fifty shares

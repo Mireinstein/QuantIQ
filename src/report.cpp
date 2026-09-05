@@ -16,6 +16,7 @@ namespace {
 struct Lot {
     Quantity quantity;
     double price;
+    Timestamp opened;
 };
 
 /// Per strategy and symbol, buys queue up as open lots and each sell consumes
@@ -27,7 +28,13 @@ struct Book {
 
 }  // namespace
 
-std::vector<StrategyResult> summarize(const std::string& journal_path) {
+namespace {
+
+/// One pass over the journal, producing both the per-trade detail and the
+/// per-strategy totals. Written once because the two used to drift apart when
+/// the matching rule was changed in only one of them.
+void walk(const std::string& journal_path, std::vector<Trade>* out_trades,
+          std::map<std::string, StrategyResult>* out_results) {
     std::ifstream in(journal_path);
     if (!in) throw DataError("cannot read journal: " + journal_path);
 
@@ -48,6 +55,13 @@ std::vector<StrategyResult> summarize(const std::string& journal_path) {
         const auto side = j.value("side", "");
         const auto quantity = j.value("quantity", Quantity{0});
         const auto price = j.value("price", 0.0);
+        const auto reason = j.value("reason", "");
+        Timestamp when{};
+        try {
+            when = parse_date(j.value("ts", ""));
+        } catch (const DataError&) {
+            // A journal line without a usable date still carries its money.
+        }
 
         auto& result = results[strategy];
         result.strategy = strategy;
@@ -55,16 +69,22 @@ std::vector<StrategyResult> summarize(const std::string& journal_path) {
         auto& queue = book.lots[{strategy, symbol}];
 
         if (side == "buy") {
-            queue.push_back(Lot{quantity, price});
+            queue.push_back(Lot{quantity, price, when});
             continue;
         }
 
         Quantity remaining = quantity;
         double profit = 0.0;
+        double entry_price = 0.0;
+        Timestamp opened{};
         while (remaining > 0 && !queue.empty()) {
             Lot& lot = queue.front();
             const Quantity matched = std::min(remaining, lot.quantity);
             profit += (price - lot.price) * static_cast<double>(matched);
+            if (entry_price == 0.0) {
+                entry_price = lot.price;
+                opened = lot.opened;
+            }
             lot.quantity -= matched;
             remaining -= matched;
             if (lot.quantity == 0) queue.pop_front();
@@ -72,12 +92,21 @@ std::vector<StrategyResult> summarize(const std::string& journal_path) {
 
         if (remaining == quantity) continue;  // nothing was actually closed
 
+        if (out_trades != nullptr) {
+            out_trades->push_back(Trade{strategy, symbol, opened, when, quantity - remaining,
+                                        Price::from_double(entry_price),
+                                        Price::from_double(price), Money::from_double(profit),
+                                        reason});
+        }
+
         ++result.trades;
         if (profit > 0) ++result.wins;
         result.net += Money::from_double(profit);
 
         double& equity = running[strategy];
         equity += profit;
+        result.equity.push_back(equity);
+
         double& high = peak[strategy];
         high = std::max(high, equity);
         const double drawdown = equity - high;
@@ -86,9 +115,24 @@ std::vector<StrategyResult> summarize(const std::string& journal_path) {
         }
     }
 
+    if (out_results != nullptr) *out_results = std::move(results);
+}
+
+}  // namespace
+
+std::vector<StrategyResult> summarize(const std::string& journal_path) {
+    std::map<std::string, StrategyResult> results;
+    walk(journal_path, nullptr, &results);
+
     std::vector<StrategyResult> out;
-    for (auto& [_, r] : results) out.push_back(r);
+    for (auto& [_, r] : results) out.push_back(std::move(r));
     return out;
+}
+
+std::vector<Trade> trades_of(const std::string& journal_path) {
+    std::vector<Trade> trades;
+    walk(journal_path, &trades, nullptr);
+    return trades;
 }
 
 void print_report(std::ostream& os, const std::vector<StrategyResult>& results) {

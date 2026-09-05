@@ -31,6 +31,7 @@ add_library(quantiq_core
   src/mock_venue.cpp
   src/journal.cpp
   src/report.cpp
+  src/dashboard.cpp
   src/engine.cpp
   src/risk.cpp
   src/http.cpp

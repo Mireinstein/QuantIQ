@@ -6,6 +6,7 @@
 #include <csignal>
 
 #include "quantiq/alpaca.hpp"
+#include "quantiq/dashboard.hpp"
 #include "quantiq/engine.hpp"
 #include "quantiq/live.hpp"
 #include "quantiq/errors.hpp"
@@ -22,6 +23,7 @@ int usage() {
     std::cerr << "usage:\n"
               << "  trader --replay FILE.csv [--strategy NAME|all] [--set key=value]...\n"
               << "  trader --report [--journal FILE]\n"
+              << "  trader --dashboard [--journal FILE] [-o OUT.html]\n"
               << "  trader --live [--config FILE]\n"
               << "  trader --check\n"
               << "  trader --test-order SYMBOL QTY\n"
@@ -151,6 +153,7 @@ int main(int argc, char** argv) {
     std::string csv;
     std::string strategy_name = "SmaCrossover";
     std::string journal_path = "journal/trades.jsonl";
+    std::string out_path = "dashboard.html";
     StrategyParams params;
 
     try {
@@ -161,6 +164,10 @@ int main(int argc, char** argv) {
                 csv = argv[++i];
             } else if (arg == "--report") {
                 mode = "report";
+            } else if (arg == "--dashboard") {
+                mode = "dashboard";
+            } else if (arg == "-o" && i + 1 < argc) {
+                out_path = argv[++i];
             } else if (arg == "--list") {
                 mode = "list";
             } else if (arg == "--check") {
@@ -193,6 +200,11 @@ int main(int argc, char** argv) {
         if (mode == "live") return live(csv.empty() ? "config.json" : csv);
         if (mode == "test-order") {
             return test_order(csv, static_cast<Quantity>(params.get("qty", 1)));
+        }
+        if (mode == "dashboard") {
+            write_dashboard(journal_path, out_path);
+            std::cout << "wrote " << out_path << '\n';
+            return 0;
         }
         if (mode == "report") {
             print_report(std::cout, summarize(journal_path));

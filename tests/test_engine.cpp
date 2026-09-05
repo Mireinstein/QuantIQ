@@ -4,6 +4,7 @@
 #include <fstream>
 
 #include "quantiq/alpaca.hpp"
+#include "quantiq/dashboard.hpp"
 #include "quantiq/engine.hpp"
 #include "quantiq/errors.hpp"
 #include "quantiq/live.hpp"
@@ -358,4 +359,85 @@ TEST_CASE("a config listing no strategies is rejected rather than run empty") {
 
     REQUIRE_THROWS_AS(LiveConfig::from_file(path), ConfigError);
     std::filesystem::remove(path);
+}
+
+TEST_CASE("the dashboard renders the journal into one self-contained file") {
+    TempJournal tmp;
+    MockVenue venue(bars_from({100, 100, 110, 120, 130}));
+    ScriptedStrategy strategy(2, 4);
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
+    engine.run();
+
+    const std::string html_path = "test-dashboard.html";
+    write_dashboard(tmp.path, html_path);
+
+    std::ifstream in(html_path);
+    const std::string html((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    std::filesystem::remove(html_path);
+
+    REQUIRE(html.find("<!doctype html>") == 0);
+    REQUIRE(html.find("Scripted") != std::string::npos);
+    // Nothing fetched at runtime: the page has to be readable offline.
+    REQUIRE(html.find("<script") == std::string::npos);
+    REQUIRE(html.find("http://") == std::string::npos);
+}
+
+TEST_CASE("a journal with no closed trades still produces a page") {
+    TempJournal tmp;
+    Journal journal(tmp.path);
+    journal.session("replay_start", "nothing happened");
+
+    const std::string html_path = "test-dashboard.html";
+    write_dashboard(tmp.path, html_path);
+
+    std::ifstream in(html_path);
+    const std::string html((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    std::filesystem::remove(html_path);
+
+    REQUIRE(html.find("Nothing closed yet") != std::string::npos);
+}
+
+TEST_CASE("a strategy name from config is escaped rather than trusted into the page") {
+    TempJournal tmp;
+    {
+        std::ofstream out(tmp.path);
+        out << R"({"event":"fill","ts":"2025-01-02","symbol":"<img>","strategy":"a&b",)"
+            << R"("side":"buy","quantity":1,"price":10.0,"reason":""})" << '\n'
+            << R"({"event":"fill","ts":"2025-01-03","symbol":"<img>","strategy":"a&b",)"
+            << R"("side":"sell","quantity":1,"price":11.0,"reason":""})" << '\n';
+    }
+
+    const std::string html_path = "test-dashboard.html";
+    write_dashboard(tmp.path, html_path);
+
+    std::ifstream in(html_path);
+    const std::string html((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    std::filesystem::remove(html_path);
+
+    REQUIRE(html.find("&lt;img&gt;") != std::string::npos);
+    REQUIRE(html.find("a&amp;b") != std::string::npos);
+}
+
+TEST_CASE("trades carry the detail the totals throw away") {
+    TempJournal tmp;
+    MockVenue venue(bars_from({100, 100, 110, 120, 130}));
+    ScriptedStrategy strategy(2, 4);
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
+    engine.run();
+
+    const auto trades = trades_of(tmp.path);
+    REQUIRE(trades.size() == 1);
+    REQUIRE(trades[0].strategy == "Scripted");
+    REQUIRE(trades[0].symbol == "AAPL");
+    REQUIRE(trades[0].exit > trades[0].entry);
+    REQUIRE(trades[0].profit.ticks() > 0);
 }

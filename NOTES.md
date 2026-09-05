@@ -17,8 +17,9 @@ All eight planned steps.
 7. Live trading: reconciliation against the broker at session start, atomic
    kill switch, clean shutdown on SIGINT
 8. Market-clock loop so it runs itself daily, -O0 vs -O3 measurement, Doxygen
+9. `--dashboard`: the journal rendered as one static HTML file
 
-52 tests, all offline. `--check` and `--live` both verified against the live
+56 tests, all offline. `--check` and `--live` both verified against the live
 paper account.
 
 ## Decisions that changed along the way
@@ -44,8 +45,17 @@ socket would deliver thousands of ticks an hour that nothing reads. The thread
 structure is what a socket would need, so swapping the feed later changes one
 class.
 
+**The dashboard generates a file, it does not serve one.** A read-only view has
+no reason to be a service: the journal is the only state, so the page can be
+regenerated from it at any point and thrown away afterwards. That also keeps
+Python out of a C++ project for the sake of a chart.
+
 ## Left out on purpose
 
+- A parameter sweep. Running the replay across a grid of parameters and
+  colouring the results would show whether a good number sits on a robust
+  plateau or is a single lucky cell -- and it is the natural first use of a
+  thread pool. Not built.
 - Volatility-scaled sizing. Fixed-fractional is the baseline; scaling by ATR so
   each position carries equal *risk* rather than equal *dollars* is the
   systematic-trading standard and is the natural next change.
