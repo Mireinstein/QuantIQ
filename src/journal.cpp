@@ -12,7 +12,14 @@ Journal::Journal(const std::string& path) : path_(path), out_(path, std::ios::ap
 
 void Journal::write_line(const std::string& json) {
     out_ << json << '\n';
-    out_.flush();  // a crash should not cost the trades already made
+
+    // Fills are flushed immediately: a crash must not lose a trade that really
+    // happened. Marks are not -- there is one per bar, and losing the tail of a
+    // curve costs nothing that cannot be redrawn.
+    if (json.find("\"event\":\"fill\"") != std::string::npos ||
+        json.find("\"event\":\"rejected\"") != std::string::npos) {
+        out_.flush();
+    }
 }
 
 void Journal::fill(const Fill& f, const std::string& strategy, const std::string& reason) {
@@ -25,6 +32,18 @@ void Journal::fill(const Fill& f, const std::string& strategy, const std::string
                      {"price", f.price.to_double()},
                      {"order_id", f.order_id},
                      {"reason", reason}};
+    write_line(j.dump());
+}
+
+void Journal::mark(Timestamp ts, const std::string& strategy, const Symbol& symbol, Money equity,
+                   Price close, Quantity quantity) {
+    nlohmann::json j{{"event", "mark"},
+                     {"ts", to_date(ts)},
+                     {"strategy", strategy},
+                     {"symbol", symbol},
+                     {"equity", equity.to_double()},
+                     {"close", close.to_double()},
+                     {"quantity", quantity}};
     write_line(j.dump());
 }
 

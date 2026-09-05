@@ -1,6 +1,8 @@
 #include "quantiq/report.hpp"
 
+#include <cmath>
 #include <deque>
+#include <numeric>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -48,7 +50,22 @@ void walk(const std::string& journal_path, std::vector<Trade>* out_trades,
         if (line.empty()) continue;
 
         nlohmann::json j = nlohmann::json::parse(line, nullptr, false);
-        if (j.is_discarded() || j.value("event", "") != "fill") continue;
+        if (j.is_discarded()) continue;
+
+        const auto event = j.value("event", "");
+        if (event == "mark") {
+            auto& result = results[j.value("strategy", "unknown")];
+            result.strategy = j.value("strategy", "unknown");
+            Timestamp when{};
+            try {
+                when = parse_date(j.value("ts", ""));
+            } catch (const DataError&) {
+            }
+            result.marks.push_back(MarkPoint{when, j.value("equity", 0.0), j.value("close", 0.0),
+                                             j.value("quantity", Quantity{0}) != 0});
+            continue;
+        }
+        if (event != "fill") continue;
 
         const auto strategy = j.value("strategy", "unknown");
         const auto symbol = j.value("symbol", "");
@@ -120,12 +137,115 @@ void walk(const std::string& journal_path, std::vector<Trade>* out_trades,
 
 }  // namespace
 
+Metrics compute_metrics(const std::vector<MarkPoint>& marks, const std::vector<Trade>& trades) {
+    Metrics m;
+    if (marks.size() < 2) return m;
+
+    const double start = marks.front().equity;
+    const double end = marks.back().equity;
+    const double first_close = marks.front().close;
+    const double last_close = marks.back().close;
+    if (start <= 0.0 || first_close <= 0.0) return m;
+
+    m.valid = true;
+    m.days = static_cast<int>(marks.size());
+    m.total_return = end / start - 1.0;
+    m.benchmark_return = last_close / first_close - 1.0;
+
+    // Trading days rather than calendar days, since that is what the series is
+    // indexed by; 252 is the convention for a US equity year.
+    const double years = static_cast<double>(marks.size()) / 252.0;
+    if (years > 0.0) {
+        m.cagr = std::pow(1.0 + m.total_return, 1.0 / years) - 1.0;
+        m.benchmark_cagr = std::pow(1.0 + m.benchmark_return, 1.0 / years) - 1.0;
+    }
+
+    std::vector<double> returns;
+    returns.reserve(marks.size());
+    double peak = start;
+    int invested_days = 0;
+
+    for (std::size_t i = 1; i < marks.size(); ++i) {
+        const double previous = marks[i - 1].equity;
+        if (previous > 0.0) returns.push_back(marks[i].equity / previous - 1.0);
+
+        peak = std::max(peak, marks[i].equity);
+        if (peak > 0.0) {
+            m.max_drawdown_pct = std::min(m.max_drawdown_pct, marks[i].equity / peak - 1.0);
+        }
+        if (marks[i].invested) ++invested_days;
+    }
+    m.exposure = static_cast<double>(invested_days) / static_cast<double>(marks.size());
+
+    if (!returns.empty()) {
+        const double mean =
+            std::accumulate(returns.begin(), returns.end(), 0.0) / static_cast<double>(returns.size());
+
+        double variance = 0.0;
+        double downside = 0.0;
+        int losses = 0;
+        for (double r : returns) {
+            variance += (r - mean) * (r - mean);
+            if (r < 0.0) {
+                downside += r * r;
+                ++losses;
+            }
+        }
+        variance /= static_cast<double>(returns.size());
+
+        // Annualised by sqrt(252): daily volatility scales with the square root
+        // of time, so a yearly figure is the daily one times sqrt(trading days).
+        const double sd = std::sqrt(variance);
+        if (sd > 0.0) m.sharpe = mean / sd * std::sqrt(252.0);
+
+        // Sortino ignores upside volatility, because being surprised by a
+        // profit is not the risk anyone is trying to measure.
+        if (losses > 0) {
+            const double downside_sd = std::sqrt(downside / static_cast<double>(losses));
+            if (downside_sd > 0.0) m.sortino = mean / downside_sd * std::sqrt(252.0);
+        }
+    }
+
+    if (m.max_drawdown_pct < 0.0) m.calmar = m.cagr / -m.max_drawdown_pct;
+
+    double gross_win = 0.0;
+    double gross_loss = 0.0;
+    int wins = 0;
+    int losses = 0;
+    for (const auto& t : trades) {
+        const double p = t.profit.to_double();
+        if (p >= 0.0) {
+            gross_win += p;
+            ++wins;
+        } else {
+            gross_loss += -p;
+            ++losses;
+        }
+    }
+    if (gross_loss > 0.0) m.profit_factor = gross_win / gross_loss;
+    if (wins > 0) m.avg_win = gross_win / wins;
+    if (losses > 0) m.avg_loss = gross_loss / losses;
+    if (!trades.empty()) {
+        m.expectancy = (gross_win - gross_loss) / static_cast<double>(trades.size());
+    }
+
+    return m;
+}
+
 std::vector<StrategyResult> summarize(const std::string& journal_path) {
     std::map<std::string, StrategyResult> results;
-    walk(journal_path, nullptr, &results);
+    std::vector<Trade> trades;
+    walk(journal_path, &trades, &results);
 
     std::vector<StrategyResult> out;
-    for (auto& [_, r] : results) out.push_back(std::move(r));
+    for (auto& [name, r] : results) {
+        std::vector<Trade> mine;
+        for (const auto& t : trades) {
+            if (t.strategy == name) mine.push_back(t);
+        }
+        r.metrics = compute_metrics(r.marks, mine);
+        out.push_back(std::move(r));
+    }
     return out;
 }
 

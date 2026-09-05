@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
@@ -440,4 +441,101 @@ TEST_CASE("trades carry the detail the totals throw away") {
     REQUIRE(trades[0].symbol == "AAPL");
     REQUIRE(trades[0].exit > trades[0].entry);
     REQUIRE(trades[0].profit.ticks() > 0);
+}
+
+namespace {
+
+/// A synthetic equity series, so metric arithmetic can be checked against
+/// numbers worked out by hand rather than against whatever a replay produced.
+std::vector<MarkPoint> marks_from(const std::vector<double>& equity,
+                                  const std::vector<double>& close, bool invested = true) {
+    std::vector<MarkPoint> marks;
+    for (std::size_t i = 0; i < equity.size(); ++i) {
+        marks.push_back(MarkPoint{Timestamp{} + std::chrono::hours(24 * i), equity[i],
+                                  i < close.size() ? close[i] : 0.0, invested});
+    }
+    return marks;
+}
+
+}  // namespace
+
+TEST_CASE("total return and benchmark are measured over the same window") {
+    // Equity up 10%, the instrument up 50%: the strategy lost badly to holding.
+    const auto marks = marks_from({100.0, 105.0, 110.0}, {10.0, 12.0, 15.0});
+    const auto m = compute_metrics(marks, {});
+
+    REQUIRE(m.valid);
+    REQUIRE(m.total_return == Catch::Approx(0.10));
+    REQUIRE(m.benchmark_return == Catch::Approx(0.50));
+    REQUIRE(m.total_return < m.benchmark_return);
+}
+
+TEST_CASE("drawdown is measured from the high-water mark, not from the start") {
+    // Rises to 120, falls to 90: the drawdown is 25% off the peak, not 10% off
+    // the opening balance.
+    const auto marks = marks_from({100.0, 120.0, 90.0, 100.0}, {1.0, 1.0, 1.0, 1.0});
+    const auto m = compute_metrics(marks, {});
+
+    REQUIRE(m.max_drawdown_pct == Catch::Approx(-0.25));
+}
+
+TEST_CASE("exposure counts the days capital was actually deployed") {
+    std::vector<MarkPoint> marks = marks_from({100.0, 100.0, 100.0, 100.0}, {1, 1, 1, 1});
+    marks[0].invested = false;
+    marks[1].invested = false;
+
+    REQUIRE(compute_metrics(marks, {}).exposure == Catch::Approx(0.5));
+}
+
+TEST_CASE("a flat equity curve has no volatility and so no Sharpe") {
+    const auto m = compute_metrics(marks_from({100.0, 100.0, 100.0}, {1, 1, 1}), {});
+    REQUIRE(m.sharpe == 0.0);
+    REQUIRE(m.max_drawdown_pct == 0.0);
+}
+
+TEST_CASE("profit factor and expectancy come from the trades, not the curve") {
+    std::vector<Trade> trades;
+    const auto trade = [](double profit) {
+        Trade t;
+        t.profit = Money::from_double(profit);
+        return t;
+    };
+    trades.push_back(trade(300.0));
+    trades.push_back(trade(100.0));
+    trades.push_back(trade(-200.0));
+
+    const auto m = compute_metrics(marks_from({100.0, 110.0}, {1.0, 1.0}), trades);
+
+    REQUIRE(m.profit_factor == Catch::Approx(2.0));      // 400 won, 200 lost
+    REQUIRE(m.avg_win == Catch::Approx(200.0));
+    REQUIRE(m.avg_loss == Catch::Approx(200.0));
+    REQUIRE(m.expectancy == Catch::Approx(200.0 / 3.0));
+}
+
+TEST_CASE("a series too short to have a return yields no metrics rather than nonsense") {
+    REQUIRE_FALSE(compute_metrics({}, {}).valid);
+    REQUIRE_FALSE(compute_metrics(marks_from({100.0}, {1.0}), {}).valid);
+}
+
+TEST_CASE("the dashboard names the benchmark, not just the strategy") {
+    TempJournal tmp;
+    MockVenue venue(bars_from({100, 100, 110, 120, 130}));
+    ScriptedStrategy strategy(2, 4);
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(venue, strategy, journal, risk, Sizer{0.10});
+    engine.run();
+
+    const std::string html_path = "test-dashboard.html";
+    write_dashboard(tmp.path, html_path);
+
+    std::ifstream in(html_path);
+    const std::string html((std::istreambuf_iterator<char>(in)),
+                           std::istreambuf_iterator<char>());
+    std::filesystem::remove(html_path);
+
+    REQUIRE(html.find("buy and hold") != std::string::npos);
+    REQUIRE(html.find("Sharpe") != std::string::npos);
+    REQUIRE(html.find("Exposure") != std::string::npos);
 }

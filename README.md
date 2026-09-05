@@ -69,11 +69,28 @@ overrides the file without editing it.
 
     ./build/trader --dashboard --journal journal/trades.jsonl -o dashboard.html
 
-Writes one self-contained HTML file: the strategy table, a cumulative-profit
-curve per strategy, and every closed trade newest first. No server and nothing
-fetched at runtime, so it opens offline — the charts are inline SVG rather than
-a library, and a page that pulls a script from a CDN stops working exactly when
-you want to read it.
+Writes one self-contained HTML file: a strategy table, each strategy's equity
+against buying the instrument and holding it, an underwater plot, and every
+closed trade newest first. No server and nothing fetched at runtime, so it opens
+offline — the charts are inline SVG rather than a library, and a page that pulls
+a script from a CDN stops working exactly when you want to read it.
+
+Every strategy is drawn against buy-and-hold on a shared scale, because a rising
+curve looks like success even when doing nothing would have risen faster. On
+five years of AAPL, all four look like this:
+
+| Strategy | Trades | Return | Held | Sharpe | Max DD | Exposure |
+|---|---|---|---|---|---|---|
+| Breakout | 16 | 4.4% | 104.2% | 0.47 | -2.4% | 57% |
+| MeanReversion | 22 | 3.6% | 104.2% | 0.50 | -1.7% | 16% |
+| Momentum | 24 | 4.7% | 104.2% | 0.56 | -2.5% | 46% |
+| SmaCrossover | 29 | 3.5% | 104.2% | 0.36 | -3.0% | 57% |
+
+Each one lost to holding the stock, by a lot. Most of that is structural rather
+than a verdict on the rules: a position is 10% of equity and there is one
+symbol, so 90% of the capital never leaves cash while the benchmark is fully
+invested throughout. The metrics say the rest — Sharpe under 0.6, and exposure
+showing MeanReversion earned its return in 16% of the days.
 
 The journal is the only source of truth. Regenerate the page whenever; throwing
 it away costs nothing.

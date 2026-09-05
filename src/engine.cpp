@@ -33,14 +33,19 @@ void Engine::on_bar(const Bar& bar, bool verbose) {
     marks_[bar.symbol] = bar.close;
 
     const Account account = venue_.account();
-    risk_.observe_equity(account.cash + portfolio_.market_value(marks_));
+    const Money equity = account.cash + portfolio_.market_value(marks_);
+    const Position* position = portfolio_.find(bar.symbol);
+
+    journal_.mark(bar.ts, strategy_.name(), bar.symbol, equity, bar.close,
+                  position == nullptr ? 0 : position->quantity);
+
+    risk_.observe_equity(equity);
     if (risk_.halted()) return;
 
     const Target target = strategy_.on_bar(bar);
 
     const Quantity desired = sizer_.shares(target.weight, bar.close, account.equity);
-    const Position* held = portfolio_.find(bar.symbol);
-    const Quantity current = held == nullptr ? 0 : held->quantity;
+    const Quantity current = position == nullptr ? 0 : position->quantity;
     const Quantity delta = desired - current;
     if (delta == 0) return;
 

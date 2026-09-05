@@ -19,6 +19,16 @@ public:
     explicit Journal(const std::string& path);
 
     void fill(const Fill& f, const std::string& strategy, const std::string& reason);
+
+    /// One line per bar per strategy: what the account was worth, what the
+    /// instrument closed at, and how much was held.
+    ///
+    /// Recorded even when nothing traded, because a curve drawn only at trades
+    /// cannot show when a drawdown happened, cannot be compared against buying
+    /// and holding, and cannot say how much of the time capital was actually
+    /// deployed.
+    void mark(Timestamp ts, const std::string& strategy, const Symbol& symbol, Money equity,
+              Price close, Quantity quantity);
     void rejected(const Order& o, const std::string& why);
     void session(const std::string& event, const std::string& detail);
 

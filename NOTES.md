@@ -17,9 +17,11 @@ All eight planned steps.
 7. Live trading: reconciliation against the broker at session start, atomic
    kill switch, clean shutdown on SIGINT
 8. Market-clock loop so it runs itself daily, -O0 vs -O3 measurement, Doxygen
-9. `--dashboard`: the journal rendered as one static HTML file
+9. `--dashboard`: the journal rendered as one static HTML file, with each
+   strategy drawn against buy-and-hold, an underwater plot, and the standard
+   ratios
 
-56 tests, all offline. `--check` and `--live` both verified against the live
+63 tests, all offline. `--check` and `--live` both verified against the live
 paper account.
 
 ## Decisions that changed along the way
@@ -49,6 +51,16 @@ class.
 no reason to be a service: the journal is the only state, so the page can be
 regenerated from it at any point and thrown away afterwards. That also keeps
 Python out of a C++ project for the sake of a chart.
+
+**The curve is drawn from daily marks, not from closed trades.** The first
+version plotted cumulative profit indexed by trade number, which cannot be lined
+up against the market, cannot show when a drawdown happened, and gives two
+strategies incomparable x-axes when they trade different numbers of times. The
+engine now journals equity, close and position size every bar.
+
+**Reporting in dollars hid the result.** "$4,314 net" reads as a success. "4.4%
+against 104.2% for holding the stock" does not. Every strategy here loses to
+buy-and-hold, and a report that could not say so was not worth reading.
 
 ## Left out on purpose
 
