@@ -48,12 +48,16 @@ HttpClient::HttpClient(std::map<std::string, std::string> headers)
     : headers_(std::move(headers)) {}
 
 Response HttpClient::perform(const std::string& method, const std::string& url,
-                             const std::string& body) const {
+                             const std::string& body,
+                             const std::map<std::string, std::string>& extra) const {
     CurlHandle curl;
     Response response;
 
     for (const auto& [name, value] : headers_) curl.add_header(name + ": " + value);
-    if (!body.empty()) curl.add_header("Content-Type: application/json");
+    for (const auto& [name, value] : extra) curl.add_header(name + ": " + value);
+    if (!body.empty() && extra.find("Content-Type") == extra.end()) {
+        curl.add_header("Content-Type: application/json");
+    }
 
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, append);
@@ -65,6 +69,10 @@ Response HttpClient::perform(const std::string& method, const std::string& url,
 
     if (method == "POST") {
         curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.c_str());
+    } else if (method == "PUT") {
+        curl_easy_setopt(curl.get(), CURLOPT_CUSTOMREQUEST, "PUT");
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
     } else if (method != "GET") {
         curl_easy_setopt(curl.get(), CURLOPT_CUSTOMREQUEST, method.c_str());
     }
@@ -86,15 +94,20 @@ std::string HttpClient::check(const std::string& url, const Response& r) const {
 }
 
 std::string HttpClient::get(const std::string& url) const {
-    return check(url, perform("GET", url, ""));
+    return check(url, perform("GET", url, "", {}));
+}
+
+std::string HttpClient::put(const std::string& url, const std::string& body,
+                            const std::map<std::string, std::string>& extra_headers) const {
+    return check(url, perform("PUT", url, body, extra_headers));
 }
 
 std::string HttpClient::post(const std::string& url, const std::string& json_body) const {
-    return check(url, perform("POST", url, json_body));
+    return check(url, perform("POST", url, json_body, {}));
 }
 
 std::string HttpClient::del(const std::string& url) const {
-    return check(url, perform("DELETE", url, ""));
+    return check(url, perform("DELETE", url, "", {}));
 }
 
 std::string http_get(const std::string& url) { return HttpClient{}.get(url); }

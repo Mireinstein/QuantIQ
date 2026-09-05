@@ -166,6 +166,55 @@ void LiveTrader::trade_session(const MarketClock& clock) {
     journal_.session("session_close", risk_.halted() ? risk_.halt_reason() : "bell");
 }
 
+void LiveTrader::run_once() {
+    std::cout << "\n  account   " << venue_.account().equity << '\n';
+    reconcile();
+
+    const auto clock = venue_.clock();
+    std::cout << "  market    " << clock_line(clock) << '\n';
+
+    const auto working = venue_.symbols_with_open_orders();
+
+    for (auto& [symbol, engine] : engines_) {
+        try {
+            if (working.count(symbol) != 0) {
+                std::cout << "  " << symbol << "  order already working, left alone\n";
+                continue;
+            }
+
+            auto bars = venue_.history(symbol, kWarmupBars);
+            if (bars.empty()) {
+                std::cout << "  " << symbol << "  no bars\n";
+                continue;
+            }
+
+            // Today's bar is still forming while the market is open, and a
+            // decision taken on a partial bar would have been a different
+            // decision an hour later.
+            if (clock.is_open && bars.size() > 1) bars.pop_back();
+
+            // Everything but the last bar rebuilds the indicator state this
+            // process was started without. Only the last one is allowed to
+            // trade.
+            for (std::size_t i = 0; i + 1 < bars.size(); ++i) {
+                strategies_[symbol]->on_bar(bars[i]);
+            }
+
+            const Bar& bar = bars.back();
+            std::cout << "  " << to_date(bar.ts) << ' ' << symbol << " close " << bar.close
+                      << "  (warmed on " << bars.size() - 1 << " bars)\n";
+            engine->on_bar(bar, true);
+        } catch (const Error& e) {
+            std::cout << "  " << symbol << "  " << e.what() << '\n';
+            journal_.session("error", symbol + ": " + e.what());
+        }
+    }
+
+    journal_.session("run_once", to_date(clock.now));
+    if (risk_.halted()) std::cout << "\n  HALTED: " << risk_.halt_reason() << '\n';
+    std::cout << '\n';
+}
+
 void LiveTrader::run() {
     std::cout << "\n  account   " << venue_.account().equity << '\n';
     reconcile();

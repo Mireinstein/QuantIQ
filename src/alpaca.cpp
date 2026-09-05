@@ -71,9 +71,23 @@ std::vector<Position> AlpacaVenue::positions() const {
     return out;
 }
 
+std::set<Symbol> AlpacaVenue::symbols_with_open_orders() const {
+    const auto j = nlohmann::json::parse(client_.get(base_ + "/v2/orders?status=open"));
+
+    std::set<Symbol> symbols;
+    for (const auto& o : j) symbols.insert(o.at("symbol").get<std::string>());
+    return symbols;
+}
+
 std::vector<Bar> AlpacaVenue::history(const Symbol& symbol, int days) const {
-    const auto url = data_base_ + "/v2/stocks/" + symbol + "/bars?timeframe=1Day&limit=" +
-                     std::to_string(days) + "&adjustment=split&feed=iex";
+    // A start date is required: without one the endpoint answers with a null
+    // bar list rather than an error, which reads as "no data for this symbol".
+    // Weekends and holidays mean calendar days run well ahead of trading days,
+    // so the window is padded before being trimmed to what was asked for.
+    const auto start = std::chrono::system_clock::now() - std::chrono::hours(24 * (days * 2 + 10));
+
+    const auto url = data_base_ + "/v2/stocks/" + symbol +
+                     "/bars?timeframe=1Day&adjustment=split&feed=iex&start=" + to_date(start);
     const auto j = nlohmann::json::parse(client_.get(url));
 
     std::vector<Bar> bars;
@@ -82,6 +96,10 @@ std::vector<Bar> AlpacaVenue::history(const Symbol& symbol, int days) const {
     for (const auto& b : j.at("bars")) {
         bars.push_back(Bar{symbol, parse_rfc3339(b.at("t")), price_of(b, "o"), price_of(b, "h"),
                            price_of(b, "l"), price_of(b, "c"), b.value("v", std::int64_t{0})});
+    }
+
+    if (bars.size() > static_cast<std::size_t>(days)) {
+        bars.erase(bars.begin(), bars.end() - days);
     }
     return bars;
 }

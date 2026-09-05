@@ -23,9 +23,15 @@ public:
     std::string post(const std::string& url, const std::string& json_body) const;
     std::string del(const std::string& url) const;
 
+    /// Uploads a body to a pre-signed URL. Used to publish the dashboard to
+    /// blob storage, which needs no SDK and no CLI in the image -- the URL
+    /// already carries the only credential involved.
+    std::string put(const std::string& url, const std::string& body,
+                    const std::map<std::string, std::string>& extra_headers = {}) const;
+
 private:
-    Response perform(const std::string& method, const std::string& url,
-                     const std::string& body) const;
+    Response perform(const std::string& method, const std::string& url, const std::string& body,
+                     const std::map<std::string, std::string>& extra) const;
     std::string check(const std::string& url, const Response& r) const;
 
     std::map<std::string, std::string> headers_;

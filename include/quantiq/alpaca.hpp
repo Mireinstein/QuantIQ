@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <set>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -34,6 +35,12 @@ public:
 
     MarketClock clock() const;
     std::vector<Position> positions() const;
+
+    /// Symbols with an order still working. Shares committed to an open order
+    /// cannot be sold again, so a second order against them is rejected -- and
+    /// stacking orders on one symbol is not something a correct bot does
+    /// anyway.
+    std::set<Symbol> symbols_with_open_orders() const;
 
     /// Daily bars from Alpaca's own data API, so live and any replay built from
     /// it agree on what a bar is rather than mixing vendors.

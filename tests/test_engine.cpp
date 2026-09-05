@@ -539,3 +539,27 @@ TEST_CASE("the dashboard names the benchmark, not just the strategy") {
     REQUIRE(html.find("Sharpe") != std::string::npos);
     REQUIRE(html.find("Exposure") != std::string::npos);
 }
+
+TEST_CASE("a strategy warmed on history reaches the same state as one fed live") {
+    // A scheduled job starts a fresh process each run, so a strategy that is
+    // not replayed over past bars would restart from nothing every morning and
+    // never accumulate the history its indicators need.
+    const std::vector<double> closes{20, 19, 18, 17, 16, 15, 25, 30, 35, 40};
+
+    SmaCrossover fed_live(StrategyParams{{{"fast", 2}, {"slow", 4}}});
+    double last_live = 0.0;
+    for (double c : closes) {
+        const auto p = Price::from_double(c);
+        last_live = fed_live.on_bar(Bar{"AAPL", Timestamp{}, p, p, p, p, 0}).weight;
+    }
+
+    SmaCrossover warmed(StrategyParams{{{"fast", 2}, {"slow", 4}}});
+    double last_warm = 0.0;
+    for (std::size_t i = 0; i < closes.size(); ++i) {
+        const auto p = Price::from_double(closes[i]);
+        last_warm = warmed.on_bar(Bar{"AAPL", Timestamp{}, p, p, p, p, 0}).weight;
+    }
+
+    REQUIRE(last_warm == last_live);
+    REQUIRE(last_warm == 1.0);
+}

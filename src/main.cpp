@@ -6,6 +6,8 @@
 #include <csignal>
 
 #include "quantiq/alpaca.hpp"
+#include <cstdlib>
+
 #include "quantiq/dashboard.hpp"
 #include "quantiq/engine.hpp"
 #include "quantiq/live.hpp"
@@ -25,6 +27,7 @@ int usage() {
               << "  trader --report [--journal FILE]\n"
               << "  trader --dashboard [--journal FILE] [-o OUT.html]\n"
               << "  trader --live [--config FILE]\n"
+              << "  trader --once [--config FILE]\n"
               << "  trader --check\n"
               << "  trader --test-order SYMBOL QTY\n"
               << "  trader --list\n\n"
@@ -88,6 +91,30 @@ int replay(const std::string& csv, const std::string& strategy_name, const Strat
 /// the feed thread is stopped and joined, and the journal is flushed. Killing
 /// the process outright would leave the position and the journal disagreeing.
 void on_interrupt(int) { LiveTrader::stop_flag().store(true); }
+
+/// One pass and exit, for a scheduled job. Regenerates the dashboard and, when
+/// DASHBOARD_SAS is set, publishes it -- so the page a job produces is never
+/// stale relative to the trades it just made.
+int once(const std::string& config_path) {
+    std::filesystem::create_directories("journal");
+    LiveConfig config = LiveConfig::from_file(config_path);
+
+    LiveTrader trader(config);
+    trader.run_once();
+
+    const std::string html = std::getenv("DASHBOARD_PATH") ? std::getenv("DASHBOARD_PATH")
+                                                           : "dashboard.html";
+    write_dashboard(config.journal_path, html);
+    std::cout << "  wrote " << html << '\n';
+
+    load_env_file(".env");
+    if (const char* sas = std::getenv("DASHBOARD_SAS"); sas != nullptr && *sas != '\0') {
+        publish_dashboard(html, sas);
+        std::cout << "  published\n";
+    }
+    std::cout << '\n';
+    return 0;
+}
 
 int live(const std::string& config_path) {
     std::signal(SIGINT, on_interrupt);
@@ -174,6 +201,8 @@ int main(int argc, char** argv) {
                 mode = "check";
             } else if (arg == "--live") {
                 mode = "live";
+            } else if (arg == "--once") {
+                mode = "once";
             } else if (arg == "--config" && i + 1 < argc) {
                 csv = argv[++i];
             } else if (arg == "--test-order" && i + 2 < argc) {
@@ -198,6 +227,7 @@ int main(int argc, char** argv) {
         }
         if (mode == "check") return check();
         if (mode == "live") return live(csv.empty() ? "config.json" : csv);
+        if (mode == "once") return once(csv.empty() ? "config.json" : csv);
         if (mode == "test-order") {
             return test_order(csv, static_cast<Quantity>(params.get("qty", 1)));
         }

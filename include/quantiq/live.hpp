@@ -47,6 +47,24 @@ public:
     /// rather than by hardcoding a calendar.
     void run();
 
+    /// One pass and exit: reconcile, act on the most recent completed bar for
+    /// each symbol, and stop.
+    ///
+    /// This is what a scheduled job runs. Daily bars mean one decision per
+    /// symbol per day, so keeping a container alive around the clock would bill
+    /// twenty-four hours for a few seconds of work.
+    ///
+    /// Acts only on a *completed* bar. Today's bar keeps changing until the
+    /// close, and trading a partial bar means the decision would have been
+    /// different an hour later.
+    void run_once();
+
+    /// Number of bars pulled to warm a strategy up before it is asked for a
+    /// decision. A fresh process has no memory of yesterday, so without this a
+    /// scheduled job would restart every indicator from nothing each morning
+    /// and never accumulate the history any of them need.
+    static constexpr int kWarmupBars = 250;
+
     /// Set from the signal handler; also stops an in-progress session.
     static std::atomic<bool>& stop_flag();
 
