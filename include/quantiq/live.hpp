@@ -8,6 +8,7 @@
 
 #include "quantiq/alpaca.hpp"
 #include "quantiq/engine.hpp"
+#include "quantiq/dry_run.hpp"
 #include "quantiq/feed.hpp"
 
 namespace quantiq {
@@ -40,7 +41,7 @@ struct LiveConfig {
 /// wakes itself when the market opens.
 class LiveTrader {
 public:
-    explicit LiveTrader(LiveConfig config);
+    explicit LiveTrader(LiveConfig config, bool dry_run = false);
 
     /// Loops over trading sessions until stopped. Sleeps through nights,
     /// weekends and holidays by asking Alpaca when the market next opens
@@ -59,6 +60,9 @@ public:
     /// different an hour later.
     void run_once();
 
+    /// Call before reading the journal while the trader is still alive.
+    void flush() { journal_.flush(); }
+
     /// Number of bars pulled to warm a strategy up before it is asked for a
     /// decision. A fresh process has no memory of yesterday, so without this a
     /// scheduled job would restart every indicator from nothing each morning
@@ -75,6 +79,8 @@ private:
 
     LiveConfig config_;
     AlpacaVenue venue_;
+    std::unique_ptr<DryRunVenue> dry_;
+    Venue* trading_;   ///< venue_, or the dry-run wrapper around it
     Journal journal_;
     Risk risk_;
     /// One engine per symbol: a strategy instance carries the state of one

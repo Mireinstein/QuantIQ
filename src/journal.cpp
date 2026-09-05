@@ -10,12 +10,15 @@ Journal::Journal(const std::string& path) : path_(path), out_(path, std::ios::ap
     if (!out_) throw DataError("cannot open journal for writing: " + path);
 }
 
+void Journal::flush() { out_.flush(); }
+
 void Journal::write_line(const std::string& json) {
     out_ << json << '\n';
 
-    // Fills are flushed immediately: a crash must not lose a trade that really
-    // happened. Marks are not -- there is one per bar, and losing the tail of a
-    // curve costs nothing that cannot be redrawn.
+    // Fills and rejections are flushed at once: a crash must not lose a trade
+    // that really happened. Marks are not, because there is one per bar per
+    // symbol and flushing each costs more than the rest of a replay put
+    // together. Readers call flush() instead.
     if (json.find("\"event\":\"fill\"") != std::string::npos ||
         json.find("\"event\":\"rejected\"") != std::string::npos) {
         out_.flush();

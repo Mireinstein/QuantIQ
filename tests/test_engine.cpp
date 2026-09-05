@@ -6,6 +6,7 @@
 
 #include "quantiq/alpaca.hpp"
 #include "quantiq/dashboard.hpp"
+#include "quantiq/dry_run.hpp"
 #include "quantiq/engine.hpp"
 #include "quantiq/errors.hpp"
 #include "quantiq/live.hpp"
@@ -128,6 +129,7 @@ TEST_CASE("the report reconstructs the round trip from the journal alone") {
     Engine engine(venue, strategy, journal, risk, Sizer{0.10});
     engine.run();
 
+    journal.flush();
     const auto results = summarize(tmp.path);
     REQUIRE(results.size() == 1);
     REQUIRE(results[0].strategy == "Scripted");
@@ -372,6 +374,7 @@ TEST_CASE("the dashboard renders the journal into one self-contained file") {
     Engine engine(venue, strategy, journal, risk, Sizer{0.10});
     engine.run();
 
+    journal.flush();
     const std::string html_path = "test-dashboard.html";
     write_dashboard(tmp.path, html_path);
 
@@ -392,6 +395,7 @@ TEST_CASE("a journal with no closed trades still produces a page") {
     Journal journal(tmp.path);
     journal.session("replay_start", "nothing happened");
 
+    journal.flush();
     const std::string html_path = "test-dashboard.html";
     write_dashboard(tmp.path, html_path);
 
@@ -435,6 +439,7 @@ TEST_CASE("trades carry the detail the totals throw away") {
     Engine engine(venue, strategy, journal, risk, Sizer{0.10});
     engine.run();
 
+    journal.flush();
     const auto trades = trades_of(tmp.path);
     REQUIRE(trades.size() == 1);
     REQUIRE(trades[0].strategy == "Scripted");
@@ -527,6 +532,7 @@ TEST_CASE("the dashboard names the benchmark, not just the strategy") {
     Engine engine(venue, strategy, journal, risk, Sizer{0.10});
     engine.run();
 
+    journal.flush();
     const std::string html_path = "test-dashboard.html";
     write_dashboard(tmp.path, html_path);
 
@@ -562,4 +568,40 @@ TEST_CASE("a strategy warmed on history reaches the same state as one fed live")
 
     REQUIRE(last_warm == last_live);
     REQUIRE(last_warm == 1.0);
+}
+
+TEST_CASE("a dry run makes the same decisions but sends nothing") {
+    // Without this the only way to try the bot out is to let it trade, which
+    // means a new user's first run puts orders on their account.
+    TempJournal tmp;
+    MockVenue real(bars_from({100, 100, 110, 120, 130}));
+    DryRunVenue dry(real);
+    ScriptedStrategy strategy(2, 4);
+    Journal journal(tmp.path);
+    Risk risk;
+
+    Engine engine(dry, strategy, journal, risk, Sizer{0.10});
+    const auto stats = engine.run();
+
+    REQUIRE(stats.bars == 5);
+    REQUIRE(dry.withheld() > 0);   // it wanted to trade
+    REQUIRE(stats.fills == 0);     // and nothing was booked
+    REQUIRE(engine.portfolio().open_positions() == 0);
+
+    // Daily marks are still written, so a dry run shows the equity curve it
+    // would have had. What it must not show is trades that never happened.
+    journal.flush();
+    const auto results = summarize(tmp.path);
+    REQUIRE(results.size() == 1);
+    REQUIRE(results[0].trades == 0);
+    REQUIRE(results[0].marks.size() == 5);
+}
+
+TEST_CASE("a dry run still reads the real account and bars") {
+    MockVenue real(bars_from({100, 110}), Money::from_double(12345.0));
+    DryRunVenue dry(real);
+
+    REQUIRE(dry.account().cash == Money::from_double(12345.0));
+    REQUIRE(dry.next_bar().has_value());
+    REQUIRE(dry.name().find("dry run") != std::string::npos);
 }

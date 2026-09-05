@@ -42,8 +42,16 @@ std::string http_get(const std::string& url);
 
 /// Reads KEY=VALUE lines from a .env file into the process environment. Absent
 /// files are not an error -- credentials may equally come from the environment
-/// already, which is how they arrive in a container.
+/// already, and anything already exported wins over the file.
 void load_env_file(const std::string& path);
+
+/// Looks for .env beside `near` and then in the working directory, and loads
+/// the first one found.
+///
+/// Resolving it against the config file rather than the process's directory is
+/// what lets the binary be run from anywhere; a lookup relative to the working
+/// directory means it only ever works from inside the checkout.
+void load_env_near(const std::string& near);
 
 /// Throws ConfigError naming the variable, rather than returning an empty
 /// string that fails later as a confusing 401.

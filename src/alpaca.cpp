@@ -32,7 +32,6 @@ Price price_of(const nlohmann::json& j, const char* key) {
 }  // namespace
 
 AlpacaVenue::AlpacaVenue() {
-    load_env_file(".env");
     base_ = require_env("ALPACA_BASE_URL");
     data_base_ = require_env("ALPACA_DATA_URL");
 

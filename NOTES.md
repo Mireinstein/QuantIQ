@@ -20,8 +20,10 @@ All eight planned steps.
 9. `--dashboard`: the journal rendered as one static HTML file, with each
    strategy drawn against buy-and-hold, an underwater plot, and the standard
    ratios
+10. Packaged for other people: LICENSE, `--init`, `--dry-run`, CI on Linux and
+    macOS, and a dashboard published from replay
 
-63 tests, all offline. `--check` and `--live` both verified against the live
+66 tests, all offline. `--check` and `--live` both verified against the live
 paper account.
 
 ## Decisions that changed along the way
@@ -62,6 +64,17 @@ engine now journals equity, close and position size every bar.
 against 104.2% for holding the stock" does not. Every strategy here loses to
 buy-and-hold, and a report that could not say so was not worth reading.
 
+**`--dry-run` exists because I kept placing real orders by accident.** Running
+`--once` to check the wiring put live paper orders on the account twice. If that
+happens to the person who wrote it, it happens to everyone trying it for the
+first time.
+
+**The journal is flushed on fills, not on marks.** Flushing every line cost 28x
+on a replay (13ms to 367ms for 5,020 lines). Fills and rejections still flush at
+once because a crash must not lose a trade that really happened; readers call
+`flush()` before parsing, since the report and the dashboard read the file while
+the bot still has it open.
+
 ## Left out on purpose
 
 - A parameter sweep. Running the replay across a grid of parameters and
@@ -88,5 +101,9 @@ buy-and-hold, and a report that could not say so was not worth reading.
 ## Credentials
 
 `.env` is gitignored and holds the Alpaca paper keys. `AlpacaVenue` refuses to
-construct unless `ALPACA_BASE_URL` is the paper endpoint. A fresh clone needs
-that file recreated -- see the README.
+construct unless `ALPACA_BASE_URL` is the paper endpoint. `--init` writes the
+file and then verifies the keys reach a paper account.
+
+The lookup resolves `.env` beside the config file and then in the working
+directory. It used to be working-directory only, which meant the binary ran from
+nowhere but the checkout.

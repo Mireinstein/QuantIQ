@@ -5,6 +5,6 @@ journal/
 .DS_Store
 .claude/
 CLAUDE.md
-docs/
+docs/html/
 build-O0/
 dashboard.html

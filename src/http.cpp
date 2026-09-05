@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 #include "quantiq/errors.hpp"
@@ -130,6 +131,12 @@ void load_env_file(const std::string& path) {
         // without editing it.
         setenv(key.c_str(), value.c_str(), 0);
     }
+}
+
+void load_env_near(const std::string& near) {
+    const auto directory = std::filesystem::path(near).parent_path();
+    if (!directory.empty()) load_env_file((directory / ".env").string());
+    load_env_file(".env");
 }
 
 std::string require_env(const std::string& name) {

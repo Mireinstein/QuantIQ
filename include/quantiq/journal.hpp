@@ -32,6 +32,11 @@ public:
     void rejected(const Order& o, const std::string& why);
     void session(const std::string& event, const std::string& detail);
 
+    /// Pushes buffered lines to disk. The report and the dashboard read this
+    /// file while the bot still has it open, so they must flush first or the
+    /// tail of the run is simply missing from what they see.
+    void flush();
+
     const std::string& path() const noexcept { return path_; }
 
 private:

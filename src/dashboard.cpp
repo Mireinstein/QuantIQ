@@ -7,7 +7,6 @@
 #include <sstream>
 
 #include "quantiq/errors.hpp"
-#include "quantiq/http.hpp"
 #include "quantiq/report.hpp"
 
 namespace quantiq {
@@ -290,20 +289,3 @@ polygon { fill:var(--down); opacity:.22; }
 
 }  // namespace quantiq
 
-namespace quantiq {
-
-void publish_dashboard(const std::string& html_path, const std::string& sas_url) {
-    std::ifstream in(html_path);
-    if (!in) throw DataError("cannot read dashboard to publish: " + html_path);
-
-    const std::string html((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-
-    // x-ms-blob-type is required by Azure Blob Storage on a PUT; without it the
-    // upload is rejected with a 400 that does not say why.
-    HttpClient{}.put(sas_url, html,
-                     {{"x-ms-blob-type", "BlockBlob"},
-                      {"Content-Type", "text/html; charset=utf-8"},
-                      {"Cache-Control", "max-age=60"}});
-}
-
-}  // namespace quantiq

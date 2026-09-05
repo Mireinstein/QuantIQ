@@ -32,6 +32,7 @@ add_library(quantiq_core
   src/journal.cpp
   src/report.cpp
   src/dashboard.cpp
+  src/dry_run.cpp
   src/engine.cpp
   src/risk.cpp
   src/http.cpp

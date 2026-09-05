@@ -6,7 +6,7 @@
 #include <csignal>
 
 #include "quantiq/alpaca.hpp"
-#include <cstdlib>
+#include <fstream>
 
 #include "quantiq/dashboard.hpp"
 #include "quantiq/engine.hpp"
@@ -26,8 +26,9 @@ int usage() {
               << "  trader --replay FILE.csv [--strategy NAME|all] [--set key=value]...\n"
               << "  trader --report [--journal FILE]\n"
               << "  trader --dashboard [--journal FILE] [-o OUT.html]\n"
-              << "  trader --live [--config FILE]\n"
-              << "  trader --once [--config FILE]\n"
+              << "  trader --live [--config FILE] [--dry-run]\n"
+              << "  trader --once [--config FILE] [--dry-run]\n"
+              << "  trader --init\n"
               << "  trader --check\n"
               << "  trader --test-order SYMBOL QTY\n"
               << "  trader --list\n\n"
@@ -83,6 +84,7 @@ int replay(const std::string& csv, const std::string& strategy_name, const Strat
         std::cout << '\n';
     }
 
+    journal.flush();
     print_report(std::cout, summarize(journal_path));
     return 0;
 }
@@ -92,36 +94,60 @@ int replay(const std::string& csv, const std::string& strategy_name, const Strat
 /// the process outright would leave the position and the journal disagreeing.
 void on_interrupt(int) { LiveTrader::stop_flag().store(true); }
 
-/// One pass and exit, for a scheduled job. Regenerates the dashboard and, when
-/// DASHBOARD_SAS is set, publishes it -- so the page a job produces is never
-/// stale relative to the trades it just made.
-int once(const std::string& config_path) {
-    std::filesystem::create_directories("journal");
-    LiveConfig config = LiveConfig::from_file(config_path);
+/// First run: write a .env for the user to fill in, or check the one they have
+/// actually reaches a paper account.
+///
+/// The point is that a new user finds out what is wrong here, in one place,
+/// rather than from a 401 several steps later.
+int init() {
+    const std::filesystem::path env_path = ".env";
 
-    LiveTrader trader(config);
-    trader.run_once();
+    if (!std::filesystem::exists(env_path)) {
+        std::ofstream out(env_path);
+        if (!out) throw ConfigError("cannot write .env in this directory");
+        out << "ALPACA_API_KEY_ID=\n"
+               "ALPACA_API_SECRET_KEY=\n"
+               "ALPACA_BASE_URL=https://paper-api.alpaca.markets\n"
+               "ALPACA_DATA_URL=https://data.alpaca.markets\n";
 
-    const std::string html = std::getenv("DASHBOARD_PATH") ? std::getenv("DASHBOARD_PATH")
-                                                           : "dashboard.html";
-    write_dashboard(config.journal_path, html);
-    std::cout << "  wrote " << html << '\n';
+        std::cout << "\n  wrote .env\n\n"
+                  << "  Put your paper keys in it, then run this again.\n"
+                  << "  Free from https://app.alpaca.markets/paper/dashboard/overview\n"
+                  << "  -- open the API Keys panel and generate a key.\n\n";
+        return 0;
+    }
 
     load_env_file(".env");
-    if (const char* sas = std::getenv("DASHBOARD_SAS"); sas != nullptr && *sas != '\0') {
-        publish_dashboard(html, sas);
-        std::cout << "  published\n";
-    }
-    std::cout << '\n';
+    const AlpacaVenue venue;
+    const auto account = venue.account();
+
+    std::cout << "\n  keys work · paper account · equity " << account.equity << "\n\n"
+              << "  Next:  ./build/fetch-bars AAPL 5y\n"
+              << "         ./build/trader --replay bars/AAPL-5y.csv --strategy all\n\n";
     return 0;
 }
 
-int live(const std::string& config_path) {
+/// One pass and exit, then regenerate the dashboard so the page is never stale
+/// relative to the trades just made.
+int once(const std::string& config_path, bool dry_run) {
+    std::filesystem::create_directories("journal");
+    const LiveConfig config = LiveConfig::from_file(config_path);
+
+    LiveTrader trader(config, dry_run);
+    trader.run_once();
+    trader.flush();
+
+    write_dashboard(config.journal_path, "dashboard.html");
+    std::cout << "  wrote dashboard.html\n\n";
+    return 0;
+}
+
+int live(const std::string& config_path, bool dry_run) {
     std::signal(SIGINT, on_interrupt);
     std::signal(SIGTERM, on_interrupt);
 
     std::filesystem::create_directories("journal");
-    LiveTrader trader(LiveConfig::from_file(config_path));
+    LiveTrader trader(LiveConfig::from_file(config_path), dry_run);
     trader.run();
     return 0;
 }
@@ -182,6 +208,7 @@ int main(int argc, char** argv) {
     std::string journal_path = "journal/trades.jsonl";
     std::string out_path = "dashboard.html";
     StrategyParams params;
+    bool dry_run = false;
 
     try {
         for (int i = 1; i < argc; ++i) {
@@ -203,6 +230,10 @@ int main(int argc, char** argv) {
                 mode = "live";
             } else if (arg == "--once") {
                 mode = "once";
+            } else if (arg == "--init") {
+                mode = "init";
+            } else if (arg == "--dry-run") {
+                dry_run = true;
             } else if (arg == "--config" && i + 1 < argc) {
                 csv = argv[++i];
             } else if (arg == "--test-order" && i + 2 < argc) {
@@ -225,9 +256,15 @@ int main(int argc, char** argv) {
             for (const auto& name : StrategyRegistry::instance().names()) std::cout << name << '\n';
             return 0;
         }
-        if (mode == "check") return check();
-        if (mode == "live") return live(csv.empty() ? "config.json" : csv);
-        if (mode == "once") return once(csv.empty() ? "config.json" : csv);
+        if (mode == "init") return init();
+        if (mode == "check") {
+            load_env_near(csv.empty() ? "config.json" : csv);
+            return check();
+        }
+        const std::string config = csv.empty() ? "config.json" : csv;
+        if (mode == "live" || mode == "once") load_env_near(config);
+        if (mode == "live") return live(config, dry_run);
+        if (mode == "once") return once(config, dry_run);
         if (mode == "test-order") {
             return test_order(csv, static_cast<Quantity>(params.get("qty", 1)));
         }

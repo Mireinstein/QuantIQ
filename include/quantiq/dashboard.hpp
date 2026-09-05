@@ -14,10 +14,4 @@ namespace quantiq {
 /// network -- which is most of the times you actually want to read it.
 void write_dashboard(const std::string& journal_path, const std::string& out_path);
 
-/// Uploads the page to a pre-signed blob URL, which is how it reaches a public
-/// static website without an Azure SDK or a CLI in the image. The URL is the
-/// only credential, so it belongs in the environment rather than on a command
-/// line where it would land in shell history and process listings.
-void publish_dashboard(const std::string& html_path, const std::string& sas_url);
-
 }  // namespace quantiq

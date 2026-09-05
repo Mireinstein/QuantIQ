@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcurl
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
+      # CMake fetches nlohmann/json and Catch2 on a cold cache, which is most of
+      # the build time.
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ matrix.os }}-deps-${{ hashFiles('CMakeLists.txt') }}
+
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build -j
+      # The suite runs entirely against MockVenue, so CI needs no credentials
+      # and places no orders.
+      - run: ctest --test-dir build --output-on-failure

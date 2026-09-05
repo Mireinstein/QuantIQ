@@ -82,15 +82,18 @@ LiveConfig LiveConfig::from_file(const std::string& path) {
     return config;
 }
 
-LiveTrader::LiveTrader(LiveConfig config)
+LiveTrader::LiveTrader(LiveConfig config, bool dry_run)
     : config_(std::move(config)), journal_(config_.journal_path), risk_(config_.risk) {
     register_builtin_strategies();
+
+    if (dry_run) dry_ = std::make_unique<DryRunVenue>(venue_);
+    trading_ = dry_ ? static_cast<Venue*>(dry_.get()) : static_cast<Venue*>(&venue_);
 
     const Sizer sizer(config_.position_fraction);
     for (const auto& spec : config_.strategies) {
         for (const auto& symbol : spec.symbols) {
             strategies_[symbol] = StrategyRegistry::instance().create(spec.name, spec.params);
-            engines_[symbol] = std::make_unique<Engine>(venue_, *strategies_[symbol], journal_,
+            engines_[symbol] = std::make_unique<Engine>(*trading_, *strategies_[symbol], journal_,
                                                         risk_, sizer, config_.rebalance_band);
         }
     }
@@ -167,7 +170,8 @@ void LiveTrader::trade_session(const MarketClock& clock) {
 }
 
 void LiveTrader::run_once() {
-    std::cout << "\n  account   " << venue_.account().equity << '\n';
+    std::cout << "\n  account   " << venue_.account().equity << "  on " << trading_->name()
+              << '\n';
     reconcile();
 
     const auto clock = venue_.clock();
